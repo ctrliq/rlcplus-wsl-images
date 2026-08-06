@@ -1,4 +1,4 @@
-# rocky-wsl-images (RLC+)
+# rlcplus-wsl-images
 
 Builds and hosts the official `.wsl` images for **RLC+ (Rocky Linux Plus, CIQ)**,
 for submission to and ongoing maintenance in Microsoft's WSL distribution
@@ -9,6 +9,10 @@ community `RockyLinux-9`/`RockyLinux-10` entries are expected to be owned and
 maintained by RESF using their existing `dl.rockylinux.org` builds — this repo
 does not build those.
 
+Naming convention for future CIQ WSL image repos, if other product lines are
+ever added: `<product>-wsl-images` (e.g. a hypothetical `rlcpro9-wsl-images`).
+Nothing beyond `rlcplus-wsl-images` is planned at this time.
+
 ## Layout
 
 ```
@@ -17,30 +21,40 @@ overlay/                       # Files layered onto the base RLC+ rootfs
   etc/wsl-distribution.conf.template
   usr/libexec/wsl/oobe.sh
   usr/lib/tmpfiles.d/wsl-setup.conf
-  usr/share/pixmaps/            # TODO: add ciq-rlcplus-logo.ico here
+  usr/share/pixmaps/ciq-rlcplus-logo.ico   # real CIQ artwork, in place
 build/
   build.sh                      # Assembles rootfs + overlay -> .wsl tarball
 .github/workflows/
   build-release.yml             # CI: build both arches, cut a GitHub Release
+                                 # (rootfs-fetch step is still a placeholder - see below)
 ```
+
+## Status
+
+All four combinations have been built and verified:
+
+| | x86_64 | aarch64 |
+|---|---|---|
+| **RLC+ 9** | boot-tested on real Windows hardware | packaging structure verified (unit masking, overlay files, icon all present); pending a physical ARM64 boot test |
+| **RLC+ 10** | boot-tested on real Windows hardware | packaging structure verified; pending a physical ARM64 boot test |
+
+Verified working: OOBE user creation, passwordless sudo, `NetworkManager`
+correctly masked with networking still functional, icon renders correctly in
+Windows Terminal.
 
 ## What still needs to be plugged in
 
-1. **RLC+ rootfs source.** `build.sh` takes an already-extracted rootfs
-   directory as input; it does not build one. Wire up whichever CIQ already
-   uses internally — most likely either:
-   - `docker export`/`podman export` from the RLC+ container image, or
-   - loop-mounting the RLC+ GenericCloud qcow2 (`depot.ciq.com`) and tarring
-     the filesystem
-   Update the placeholder step in `.github/workflows/build-release.yml`
-   accordingly.
-2. **A real CIQ/RLC+ icon**, converted to `.ico`, dropped at
-   `overlay/usr/share/pixmaps/ciq-rlcplus-logo.ico`. Until this exists, the
-   build proceeds but the distro falls back to WSL's default icon (this is
-   intentional — RESF's existing image shipped with a leftover Fedora icon by
-   skipping this step, which we're not repeating).
+1. **Automating the RLC+ rootfs source in CI.** The manual process is proven
+   and documented below (`virt-tar-out` against the RLC+ GenericCloud qcow2).
+   `.github/workflows/build-release.yml` still has this as a placeholder step
+   — someone needs to wire up fetching the qcow2 from `depot.ciq.com` and
+   running the same extraction inside the Actions runner so releases can be
+   cut without a manual rocklab session each time.
+2. ~~A real CIQ/RLC+ icon~~ — done. `overlay/usr/share/pixmaps/ciq-rlcplus-logo.ico`
+   is the real CIQ mark (cropped from official brand artwork), multi-resolution,
+   confirmed rendering correctly in Windows Terminal.
 
-## Why the build fixes two things RESF's existing Rocky `.wsl` image doesn't
+## Why the build fixes things RESF's existing Rocky `.wsl` image doesn't
 
 Inspecting RESF's current `Rocky-9-WSL-Base` image surfaced two gaps this repo
 corrects from the start:
@@ -54,6 +68,23 @@ corrects from the start:
   units that typically need masking, since WSL manages networking itself.
   `build.sh` masks all three by symlinking them to `/dev/null` under
   `etc/systemd/system/`.
+
+A third issue surfaced during our own testing, specific to building from a
+**cloud image** rather than a minimal rootfs (RESF's base likely isn't a raw
+cloud image the same way RLC+'s GenericCloud qcow2 is):
+
+- **cloud-init**: GenericCloud images ship with cloud-init enabled, expecting
+  a datasource (metadata service or NoCloud seed) that WSL doesn't provide.
+  Left as-is, `oobe.sh` correctly detects cloud-init and defers user creation
+  to it — but cloud-init then hangs forever waiting for a datasource that
+  never appears, and no user ever gets created. `build.sh` masks
+  `cloud-init.service`, `cloud-init-local.service`, `cloud-config.service`,
+  `cloud-final.service`, and `cloud-init-network.service` so `oobe.sh`'s own
+  first-run logic runs instead.
+- **fstab**: the cloud image's `/etc/fstab` references disks/labels that
+  don't exist under WSL, causing `mount -a` to fail on every boot. `build.sh`
+  backs up the original to `/etc/fstab.orig-cloud-image` and replaces the live
+  `/etc/fstab` with an empty, commented stub.
 
 ## Versioning / release convention
 
@@ -70,20 +101,55 @@ e.g. `RLCPlus-9-WSL-9-20260806.0.x86_64.wsl`
 Each release also gets a `.CHECKSUM` file (sha256sum output) alongside the
 image, matching the pattern RESF already uses for their Rocky images.
 
-## Manual build
+## Manual build (proven working end-to-end)
 
-```
-./build/build.sh \
+```bash
+# 1. Extract rootfs directly from the RLC+ GenericCloud qcow2 - no mounting,
+#    no loop devices needed. Requires libguestfs-tools-c (virt-tar-out).
+virt-tar-out -a RLC-Plus-9-<date>-GenericCloud-x86_64.qcow2 / rlc-plus-9-rootfs.tar
+
+# 2. Unpack AS ROOT - this matters. The tarball preserves ownership info
+#    (e.g. /etc/shadow) that a non-root `tar -x` will silently mangle.
+mkdir -p ~/rlc-plus-9-rootfs
+sudo tar -xf rlc-plus-9-rootfs.tar -C ~/rlc-plus-9-rootfs
+
+# 3. Build (also as root, same ownership reasoning)
+sudo ./build/build.sh \
   --version 9 \
   --arch x86_64 \
-  --rootfs /path/to/extracted-rlcplus-9-rootfs \
+  --rootfs ~/rlc-plus-9-rootfs \
   --build-tag 20260806.0 \
   --out ./dist
+```
+
+Same process for `--version 10` and `--arch aarch64` - confirmed to work
+identically across all four combinations. Note `virt-tar-out` produces a
+plain `.tar`, not `.tar.gz`, despite what a lot of examples elsewhere assume -
+use `tar -xf` (auto-detects), not `-xzf`.
+
+**Architecture note:** building an aarch64 `.wsl` from an x86_64 host works
+fine - `virt-tar-out` and `build.sh` only read/copy/repackage files, nothing
+executes guest code, so no emulation is needed at build time. You'll need
+real ARM64 hardware to actually *boot-test* the result, though - WSL2 doesn't
+emulate a different CPU architecture from the one Windows is running on.
+
+## Testing a built image
+
+```powershell
+wsl --install --from-file .\RLCPlus-9-WSL-9-<tag>.x86_64.wsl
+```
+
+If re-testing after a previous attempt, unregister first or you'll hit
+`ERROR_ALREADY_EXISTS`:
+```powershell
+wsl --unregister RLCPlus-9
 ```
 
 ## Next step after a release is cut
 
 Take the release asset URL + the contents of the matching `.CHECKSUM` file and
-add/update the `RockyLinuxPlus` (naming TBD, see internal discussion) entry in
-a PR against `microsoft/WSL`'s `distributions/DistributionInfo.json`, following
-the existing `AlmaLinux` entry as a structural template.
+add/update the `RLCPlus-9`/`RLCPlus-10` entries in a PR against
+`microsoft/WSL`'s `distributions/DistributionInfo.json`, following the
+existing `AlmaLinux` entry as a structural template. The separate community
+`RockyLinux-9`/`RockyLinux-10` entries are expected in the same manifest,
+owned and maintained by RESF.
