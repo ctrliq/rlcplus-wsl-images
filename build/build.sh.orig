@@ -1,0 +1,116 @@
+#!/usr/bin/bash
+#
+# build.sh - Assemble a WSL-ready .wsl image for RLC+ (Rocky Linux Plus)
+#
+# Takes an already-extracted RLC+ rootfs directory and layers on the
+# WSL-specific overlay (wsl.conf, wsl-distribution.conf, oobe.sh, masked
+# systemd units), then packages it as a .wsl tarball ready for
+# `wsl --install --from-file` or a DistributionInfo.json manifest entry.
+#
+# This script does NOT produce the base rootfs itself. Plug in whichever
+# CIQ already uses to produce an RLC+ rootfs, e.g.:
+#   - `docker export` / `podman export` from the RLC+ container image, or
+#   - loop-mounting the RLC+ GenericCloud qcow2 and tarring the filesystem
+#
+# Usage:
+#   build.sh --version 9 --arch x86_64 --rootfs /path/to/extracted-rootfs \
+#             --build-tag 20260806.0 --out /path/to/output-dir
+#
+set -ueo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OVERLAY_DIR="$(cd "${SCRIPT_DIR}/../overlay" && pwd)"
+
+VERSION=""
+ARCH=""
+ROOTFS=""
+BUILD_TAG=""
+OUT_DIR="${SCRIPT_DIR}/../dist"
+
+usage() {
+  echo "Usage: $0 --version <9|10> --arch <x86_64|aarch64> --rootfs <dir> --build-tag <tag> [--out <dir>]" >&2
+  exit 1
+}
+
+while [[ "$#" -ge 1 ]]; do
+  case "$1" in
+    --version) VERSION="$2"; shift 2 ;;
+    --arch) ARCH="$2"; shift 2 ;;
+    --rootfs) ROOTFS="$2"; shift 2 ;;
+    --build-tag) BUILD_TAG="$2"; shift 2 ;;
+    --out) OUT_DIR="$2"; shift 2 ;;
+    --help|-h) usage ;;
+    *) echo "Unknown option: $1" >&2; usage ;;
+  esac
+done
+
+[[ -z "$VERSION" || -z "$ARCH" || -z "$ROOTFS" || -z "$BUILD_TAG" ]] && usage
+[[ -d "$ROOTFS" ]] || { echo "ERROR: rootfs dir not found: $ROOTFS" >&2; exit 1; }
+
+case "$VERSION" in
+  9) MAJOR_MINOR="9" ;;
+  10) MAJOR_MINOR="10" ;;
+  *) echo "ERROR: --version must be 9 or 10" >&2; exit 1 ;;
+esac
+
+DIST_NAME="RLCPlus-${VERSION}"
+ICON_PATH="/usr/share/pixmaps/ciq-rlcplus-logo.ico"
+
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+STAGE="${WORK_DIR}/stage"
+mkdir -p "$STAGE"
+
+echo "==> Copying base rootfs into staging area"
+# Use rsync-style copy preserving perms/owners/xattrs/hardlinks.
+cp -a "${ROOTFS}/." "$STAGE/"
+
+echo "==> Applying WSL overlay files"
+mkdir -p "${STAGE}/etc" "${STAGE}/usr/libexec/wsl" "${STAGE}/usr/lib/tmpfiles.d" "${STAGE}/usr/share/pixmaps"
+
+cp "${OVERLAY_DIR}/etc/wsl.conf" "${STAGE}/etc/wsl.conf"
+
+sed -e "s|DEFAULT_NAME|${DIST_NAME}|" \
+    -e "s|DEFAULT_ICON_FULL_PATH|${ICON_PATH}|" \
+    "${OVERLAY_DIR}/etc/wsl-distribution.conf.template" > "${STAGE}/etc/wsl-distribution.conf"
+
+install -m 0755 "${OVERLAY_DIR}/usr/libexec/wsl/oobe.sh" "${STAGE}/usr/libexec/wsl/oobe.sh"
+cp "${OVERLAY_DIR}/usr/lib/tmpfiles.d/wsl-setup.conf" "${STAGE}/usr/lib/tmpfiles.d/wsl-setup.conf"
+
+# TODO: drop the real RLC+ icon asset in overlay/usr/share/pixmaps/ and
+# uncomment once available. Falls back to no icon (WSL default) until then.
+if [[ -f "${OVERLAY_DIR}/usr/share/pixmaps/ciq-rlcplus-logo.ico" ]]; then
+  cp "${OVERLAY_DIR}/usr/share/pixmaps/ciq-rlcplus-logo.ico" "${STAGE}/usr/share/pixmaps/ciq-rlcplus-logo.ico"
+else
+  echo "WARNING: no CIQ RLC+ icon asset found at overlay/usr/share/pixmaps/ciq-rlcplus-logo.ico"
+  echo "         Distro will fall back to WSL's default icon until this is added."
+fi
+
+echo "==> Masking systemd units that conflict with WSL networking"
+mkdir -p "${STAGE}/etc/systemd/system"
+for unit in NetworkManager.service NetworkManager-wait-online.service tmp.mount; do
+  ln -sf /dev/null "${STAGE}/etc/systemd/system/${unit}"
+done
+
+echo "==> Ensuring no baked-in resolv.conf ships in the image"
+rm -f "${STAGE}/etc/resolv.conf"
+
+echo "==> Sanity checks"
+grep -q '^root:x:0:0:' "${STAGE}/etc/passwd" || { echo "ERROR: root uid 0 entry not found in /etc/passwd"; exit 1; }
+if [[ -f "${STAGE}/etc/shadow" ]]; then
+  if grep -qE '^root:\$' "${STAGE}/etc/shadow"; then
+    echo "WARNING: root has a password hash set in /etc/shadow; consider locking it for the shipped image."
+  fi
+fi
+
+mkdir -p "$OUT_DIR"
+OUT_FILE="${OUT_DIR}/RLCPlus-${MAJOR_MINOR}-WSL-${VERSION}-${BUILD_TAG}.${ARCH}.wsl"
+
+echo "==> Packaging ${OUT_FILE}"
+tar --numeric-owner -C "$STAGE" -czf "$OUT_FILE" .
+
+echo "==> Generating checksum"
+( cd "$OUT_DIR" && sha256sum "$(basename "$OUT_FILE")" > "$(basename "$OUT_FILE").CHECKSUM" )
+
+echo "Done: ${OUT_FILE}"

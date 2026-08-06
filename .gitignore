@@ -1,0 +1,6 @@
+
+dist/
+*.wsl
+*.tar
+*.tar.gz
+*.qcow2

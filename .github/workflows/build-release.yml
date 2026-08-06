@@ -1,0 +1,76 @@
+name: Build and release RLC+ WSL images
+
+on:
+  workflow_dispatch:
+    inputs:
+      rlcplus_version:
+        description: "RLC+ version (9 or 10)"
+        required: true
+        type: choice
+        options: ["9", "10"]
+      build_tag:
+        description: "Build tag, e.g. 20260806.0"
+        required: true
+        type: string
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # TODO: replace with CIQ's actual RLC+ rootfs source, e.g.:
+      #   - pull the RLC+ container image and `docker export` it, or
+      #   - download the RLC+ GenericCloud qcow2 from depot.ciq.com and
+      #     loop-mount + tar the filesystem
+      - name: Fetch RLC+ base rootfs (placeholder)
+        run: |
+          echo "TODO: fetch RLC+ ${{ inputs.rlcplus_version }} rootfs for ${{ matrix.arch }}"
+          echo "and extract it to ./rootfs-${{ matrix.arch }}/"
+          exit 1
+
+      - name: Build .wsl image
+        run: |
+          ./build/build.sh \
+            --version "${{ inputs.rlcplus_version }}" \
+            --arch "${{ matrix.arch }}" \
+            --rootfs "./rootfs-${{ matrix.arch }}" \
+            --build-tag "${{ inputs.build_tag }}" \
+            --out ./dist
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rlcplus-${{ inputs.rlcplus_version }}-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifact directories
+        run: |
+          mkdir -p release
+          find dist -type f -exec mv {} release/ \;
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rlcplus-${{ inputs.rlcplus_version }}-${{ inputs.build_tag }}
+          name: "RLC+ ${{ inputs.rlcplus_version }} WSL image - ${{ inputs.build_tag }}"
+          files: release/*
+          # Pin these exact release asset URLs + the .CHECKSUM contents in
+          # the microsoft/WSL DistributionInfo.json PR. Never point the
+          # manifest at a floating "latest" URL - see README for why.
