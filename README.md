@@ -31,16 +31,17 @@ build/
 
 ## Status
 
-All four combinations have been built and verified:
+All four combinations have been built and fully boot-tested on real hardware:
 
 | | x86_64 | aarch64 |
 |---|---|---|
-| **RLC+ 9** | boot-tested on real Windows hardware | packaging structure verified (unit masking, overlay files, icon all present); pending a physical ARM64 boot test |
-| **RLC+ 10** | boot-tested on real Windows hardware | packaging structure verified; pending a physical ARM64 boot test |
+| **RLC+ 9** | boot-tested on real hardware | boot-tested on real hardware (Snapdragon X2 Plus) |
+| **RLC+ 10** | boot-tested on real hardware | boot-tested on real hardware (Snapdragon X2 Plus) |
 
-Verified working: OOBE user creation, passwordless sudo, `NetworkManager`
-correctly masked with networking still functional, icon renders correctly in
-Windows Terminal.
+Verified working across all four: OOBE user creation, passwordless sudo,
+`NetworkManager` correctly masked with networking still functional, icon
+renders correctly in Windows Terminal, `/etc/os-release` and `uname -a`
+confirm correct distro identity and architecture.
 
 ## What still needs to be plugged in
 
@@ -50,9 +51,6 @@ Windows Terminal.
    — someone needs to wire up fetching the qcow2 from `depot.ciq.com` and
    running the same extraction inside the Actions runner so releases can be
    cut without a manual rocklab session each time.
-2. ~~A real CIQ/RLC+ icon~~ — done. `overlay/usr/share/pixmaps/ciq-rlcplus-logo.ico`
-   is the real CIQ mark (cropped from official brand artwork), multi-resolution,
-   confirmed rendering correctly in Windows Terminal.
 
 ## Why the build fixes things RESF's existing Rocky `.wsl` image doesn't
 
