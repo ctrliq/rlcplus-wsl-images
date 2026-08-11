@@ -54,7 +54,7 @@ case "$VERSION" in
 esac
 
 DIST_NAME="RLCPlus-${VERSION}"
-ICON_PATH="/usr/share/pixmaps/ciq-rlcplus-logo.ico"
+ICON_PATH="/usr/share/wsl/ciq-rlcplus-logo.ico"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -67,7 +67,7 @@ echo "==> Copying base rootfs into staging area"
 cp -a "${ROOTFS}/." "$STAGE/"
 
 echo "==> Applying WSL overlay files"
-mkdir -p "${STAGE}/etc" "${STAGE}/usr/libexec/wsl" "${STAGE}/usr/lib/tmpfiles.d" "${STAGE}/usr/share/pixmaps"
+mkdir -p "${STAGE}/etc" "${STAGE}/usr/libexec/wsl" "${STAGE}/usr/lib/tmpfiles.d" "${STAGE}/usr/share/wsl"
 
 cp "${OVERLAY_DIR}/etc/wsl.conf" "${STAGE}/etc/wsl.conf"
 
@@ -78,12 +78,10 @@ sed -e "s|DEFAULT_NAME|${DIST_NAME}|" \
 install -m 0755 "${OVERLAY_DIR}/usr/libexec/wsl/oobe.sh" "${STAGE}/usr/libexec/wsl/oobe.sh"
 cp "${OVERLAY_DIR}/usr/lib/tmpfiles.d/wsl-setup.conf" "${STAGE}/usr/lib/tmpfiles.d/wsl-setup.conf"
 
-# TODO: drop the real RLC+ icon asset in overlay/usr/share/pixmaps/ and
-# uncomment once available. Falls back to no icon (WSL default) until then.
-if [[ -f "${OVERLAY_DIR}/usr/share/pixmaps/ciq-rlcplus-logo.ico" ]]; then
-  cp "${OVERLAY_DIR}/usr/share/pixmaps/ciq-rlcplus-logo.ico" "${STAGE}/usr/share/pixmaps/ciq-rlcplus-logo.ico"
+if [[ -f "${OVERLAY_DIR}/usr/share/wsl/ciq-rlcplus-logo.ico" ]]; then
+  cp "${OVERLAY_DIR}/usr/share/wsl/ciq-rlcplus-logo.ico" "${STAGE}/usr/share/wsl/ciq-rlcplus-logo.ico"
 else
-  echo "WARNING: no CIQ RLC+ icon asset found at overlay/usr/share/pixmaps/ciq-rlcplus-logo.ico"
+  echo "WARNING: no CIQ RLC+ icon asset found at overlay/usr/share/wsl/ciq-rlcplus-logo.ico"
   echo "         Distro will fall back to WSL's default icon until this is added."
 fi
 
