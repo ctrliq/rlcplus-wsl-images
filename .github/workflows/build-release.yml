@@ -12,6 +12,14 @@ on:
         description: "Build tag, e.g. 20260806.0"
         required: true
         type: string
+      amd64_qcow2_url:
+        description: "Direct URL to the x86_64 GenericCloud qcow2 for this version"
+        required: true
+        type: string
+      arm64_qcow2_url:
+        description: "Direct URL to the aarch64 GenericCloud qcow2 for this version"
+        required: true
+        type: string
 
 jobs:
   build:
@@ -23,24 +31,49 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # TODO: replace with CIQ's actual RLC+ rootfs source, e.g.:
-      #   - pull the RLC+ container image and `docker export` it, or
-      #   - download the RLC+ GenericCloud qcow2 from depot.ciq.com and
-      #     loop-mount + tar the filesystem
-      - name: Fetch RLC+ base rootfs (placeholder)
+      - name: Install libguestfs-tools
         run: |
-          echo "TODO: fetch RLC+ ${{ inputs.rlcplus_version }} rootfs for ${{ matrix.arch }}"
-          echo "and extract it to ./rootfs-${{ matrix.arch }}/"
-          exit 1
+          sudo apt-get update
+          sudo apt-get install -y libguestfs-tools
+
+      - name: Select this arch's qcow2 URL
+        id: select_url
+        run: |
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            echo "url=${{ inputs.amd64_qcow2_url }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=${{ inputs.arm64_qcow2_url }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download RLC+ GenericCloud qcow2
+        run: |
+          curl -fL -o rlcplus.qcow2 "${{ steps.select_url.outputs.url }}"
+
+      - name: Extract rootfs with virt-tar-out
+        run: |
+          # GitHub-hosted runners have no KVM access, so force the slower
+          # but dependency-free direct backend rather than assuming
+          # hardware acceleration is available.
+          LIBGUESTFS_BACKEND=direct virt-tar-out -a rlcplus.qcow2 / rootfs.tar
+
+      - name: Unpack rootfs as root
+        run: |
+          # Must run as root: the tarball carries ownership/permission info
+          # (e.g. /etc/shadow) that a non-root extract would silently mangle.
+          mkdir -p rootfs
+          sudo tar -xf rootfs.tar -C rootfs
 
       - name: Build .wsl image
         run: |
-          ./build/build.sh \
+          sudo ./build/build.sh \
             --version "${{ inputs.rlcplus_version }}" \
             --arch "${{ matrix.arch }}" \
-            --rootfs "./rootfs-${{ matrix.arch }}" \
+            --rootfs ./rootfs \
             --build-tag "${{ inputs.build_tag }}" \
             --out ./dist
+          # dist/ was written by build.sh running as root via sudo; hand
+          # ownership back to the runner user so later steps/artifacts work
+          sudo chown -R "$(id -u):$(id -g)" ./dist
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
